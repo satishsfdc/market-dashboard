@@ -11,7 +11,9 @@ import {
   newsFeed,
 } from "@/lib/mock-data";
 
-function buildBriefing(): string[] {
+// Fallback briefing built from sample data, used if OpenAI isn't configured
+// or the request fails.
+function buildFallbackBriefing(): string[] {
   const todayEvents = economicEventsThisWeek.slice(0, 2);
   const keyRisk = [...geoRiskEvents].sort((a, b) => b.riskScore - a.riskScore)[0];
   const nearEarnings = [...earningsTracker].sort((a, b) => a.daysUntil - b.daysUntil)[0];
@@ -39,18 +41,48 @@ function buildBriefing(): string[] {
 export function AIBriefing() {
   const [generating, setGenerating] = useState(false);
   const [briefing, setBriefing] = useState<string[] | null>(null);
+  const [aiPowered, setAiPowered] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  function generate() {
+  async function generate() {
     setGenerating(true);
     setBriefing(null);
-    setTimeout(() => {
-      setBriefing(buildBriefing());
+    setError(null);
+
+    try {
+      const res = await fetch("/api/briefing", { method: "POST" });
+      const data = await res.json();
+
+      if (res.ok && Array.isArray(data.briefing) && data.briefing.length > 0) {
+        setBriefing(data.briefing);
+        setAiPowered(true);
+      } else {
+        setError(data.error || "AI briefing unavailable");
+        setBriefing(buildFallbackBriefing());
+        setAiPowered(false);
+      }
+    } catch {
+      setError("AI briefing unavailable");
+      setBriefing(buildFallbackBriefing());
+      setAiPowered(false);
+    } finally {
       setGenerating(false);
-    }, 1100);
+    }
   }
 
   return (
-    <Panel eyebrow="AI Market Briefing" title="Daily Summary">
+    <Panel
+      eyebrow="AI Market Briefing"
+      title="Daily Summary"
+      action={
+        aiPowered ? (
+          <span className="flex items-center gap-1.5 text-[10px] font-mono-data text-[var(--bull)]">
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--bull)] pulse-dot" />
+            AI-GENERATED
+          </span>
+        ) : undefined
+      }
+    >
       {!briefing && !generating && (
         <div className="text-center py-6">
           <div className="text-sm text-[var(--text-secondary)] mb-4 max-w-sm mx-auto">
@@ -76,6 +108,11 @@ export function AIBriefing() {
 
       {briefing && (
         <div>
+          {error && (
+            <div className="mb-3 text-xs text-[var(--bear)] bg-[var(--bear-dim)] border border-[var(--bear)] rounded-md px-3 py-2">
+              {error}. Showing a sample briefing — check OPENAI_API_KEY is set correctly.
+            </div>
+          )}
           <div className="space-y-2.5 mb-4">
             {briefing.map((line, i) => (
               <div key={i} className="flex items-start gap-2.5 text-sm text-[var(--text-secondary)] leading-relaxed">
