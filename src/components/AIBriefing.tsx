@@ -9,6 +9,7 @@ import {
   earningsTracker,
   geoRiskEvents,
   newsFeed,
+  watchlistDefault,
 } from "@/lib/mock-data";
 
 // Fallback briefing built from sample data, used if OpenAI isn't configured
@@ -50,7 +51,36 @@ export function AIBriefing() {
     setError(null);
 
     try {
-      const res = await fetch("/api/briefing", { method: "POST" });
+      // Get current watchlist
+      const watchlistRes = await fetch("/api/watchlist");
+      const watchlistData = await watchlistRes.json();
+      const symbols: string[] = watchlistRes.ok ? watchlistData.symbols : watchlistDefault.map((s) => s.symbol);
+
+      // Get live earnings (best-effort)
+      let earnings: unknown[] = [];
+      try {
+        const earningsRes = await fetch(`/api/earnings?symbols=${symbols.join(",")}`);
+        const earningsData = await earningsRes.json();
+        if (earningsRes.ok) earnings = earningsData.earnings;
+      } catch {
+        // ignore
+      }
+
+      // Get live news (best-effort)
+      let news: unknown[] = [];
+      try {
+        const newsRes = await fetch(`/api/news?symbols=${symbols.join(",")}`);
+        const newsData = await newsRes.json();
+        if (newsRes.ok) news = newsData.news;
+      } catch {
+        // ignore
+      }
+
+      const res = await fetch("/api/briefing", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbols, earnings, news }),
+      });
       const data = await res.json();
 
       if (res.ok && Array.isArray(data.briefing) && data.briefing.length > 0) {
