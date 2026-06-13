@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Sidebar } from "@/components/Sidebar";
 import { MobileHeader } from "@/components/MobileHeader";
 import { MarketOverview } from "@/components/MarketOverview";
@@ -145,8 +145,19 @@ const views: Record<string, () => React.ReactElement> = {
 };
 
 export default function Home() {
-  const [authed, setAuthed] = useState(false);
+  const [authed, setAuthed] = useState<boolean | null>(null);
   const [active, setActive] = useState("dashboard");
+
+  useEffect(() => {
+    fetch("/api/check-auth")
+      .then((res) => res.json())
+      .then((data) => setAuthed(!!data.authenticated))
+      .catch(() => setAuthed(false));
+  }, []);
+
+  if (authed === null) {
+    return <div className="min-h-screen bg-[var(--bg-deep)]" />;
+  }
 
   if (!authed) {
     return <LoginScreen onLogin={() => setAuthed(true)} />;

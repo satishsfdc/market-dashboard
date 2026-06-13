@@ -11,6 +11,7 @@ import {
   Sparkles,
   Settings,
   Activity,
+  LogOut,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -78,11 +79,20 @@ export function Sidebar({
         })}
       </nav>
 
-      <div className="px-5 py-4 border-t border-[var(--border-hair)]">
+      <div className="px-5 py-4 border-t border-[var(--border-hair)] space-y-3">
         <div className="flex items-center gap-2 text-[11px] text-[var(--text-muted)] font-mono-data">
           <span className="w-1.5 h-1.5 rounded-full bg-[var(--bull)] pulse-dot" />
           <span>MARKET OPEN</span>
         </div>
+        <button
+          onClick={() => {
+            fetch("/api/logout", { method: "POST" }).then(() => window.location.reload());
+          }}
+          className="flex items-center gap-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+        >
+          <LogOut size={13} />
+          Sign out
+        </button>
       </div>
     </aside>
   );
