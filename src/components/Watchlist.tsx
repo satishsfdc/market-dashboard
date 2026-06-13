@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Plus, X, Search, RefreshCw } from "lucide-react";
+import { Plus, X, Search, RefreshCw, Loader2 } from "lucide-react";
 import { watchlistDefault } from "@/lib/mock-data";
 import { Panel } from "./ui";
 import { formatNumber, formatSigned } from "@/lib/utils";
@@ -15,18 +15,23 @@ interface QuoteResult {
   error?: boolean;
 }
 
+function placeholderStock(symbol: string): WatchlistStock {
+  const fallback = watchlistDefault.find((s) => s.symbol === symbol);
+  return fallback ?? { symbol, name: symbol, price: 0, change: 0, changePercent: 0 };
+}
+
 export function Watchlist() {
-  const [stocks, setStocks] = useState<WatchlistStock[]>(watchlistDefault);
+  const [stocks, setStocks] = useState<WatchlistStock[]>([]);
   const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [loadingList, setLoadingList] = useState(true);
+  const [loadingQuotes, setLoadingQuotes] = useState(false);
   const [live, setLive] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const symbols = stocks.map((s) => s.symbol);
+  const [listError, setListError] = useState<string | null>(null);
 
   const fetchQuotes = useCallback(async (syms: string[]) => {
     if (syms.length === 0) return;
-    setLoading(true);
+    setLoadingQuotes(true);
     setError(null);
     try {
       const res = await fetch(`/api/quotes?symbols=${syms.join(",")}`);
@@ -45,9 +50,9 @@ export function Watchlist() {
           if (!quote || quote.error) return stock;
           return {
             ...stock,
-            price: quote.price,
-            change: quote.change,
-            changePercent: quote.changePercent,
+            price: quote.price ?? stock.price,
+            change: quote.change ?? stock.change,
+            changePercent: quote.changePercent ?? stock.changePercent,
           };
         })
       );
@@ -55,37 +60,85 @@ export function Watchlist() {
       setError("Failed to load live data");
       setLive(false);
     } finally {
-      setLoading(false);
+      setLoadingQuotes(false);
     }
   }, []);
 
-  // Fetch live quotes on mount
+  // Load persisted watchlist symbols on mount
   useEffect(() => {
-    fetchQuotes(symbols);
+    async function load() {
+      try {
+        const res = await fetch("/api/watchlist");
+        const data = await res.json();
+
+        if (!res.ok) {
+          setListError(data.error || "Failed to load watchlist");
+          setStocks(watchlistDefault);
+          setLoadingList(false);
+          fetchQuotes(watchlistDefault.map((s) => s.symbol));
+          return;
+        }
+
+        const loaded: WatchlistStock[] = data.symbols.map(placeholderStock);
+        setStocks(loaded);
+        setLoadingList(false);
+        fetchQuotes(data.symbols);
+      } catch {
+        setListError("Failed to load watchlist");
+        setStocks(watchlistDefault);
+        setLoadingList(false);
+        fetchQuotes(watchlistDefault.map((s) => s.symbol));
+      }
+    }
+    load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function addStock() {
+  async function addStock() {
     const symbol = input.trim().toUpperCase();
     if (!symbol) return;
     if (stocks.some((s) => s.symbol === symbol)) {
       setInput("");
       return;
     }
-    const newStock: WatchlistStock = {
-      symbol,
-      name: symbol,
-      price: 0,
-      change: 0,
-      changePercent: 0,
-    };
-    setStocks((prev) => [...prev, newStock]);
+
     setInput("");
-    fetchQuotes([symbol]);
+    try {
+      const res = await fetch("/api/watchlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setListError(data.error || "Failed to save");
+        return;
+      }
+
+      const updated: WatchlistStock[] = data.symbols.map(placeholderStock);
+      setStocks(updated);
+      fetchQuotes([symbol]);
+    } catch {
+      setListError("Failed to save watchlist");
+    }
   }
 
-  function removeStock(symbol: string) {
-    setStocks((prev) => prev.filter((s) => s.symbol !== symbol));
+  async function removeStock(symbol: string) {
+    try {
+      const res = await fetch(`/api/watchlist?symbol=${symbol}`, { method: "DELETE" });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setListError(data.error || "Failed to remove");
+        return;
+      }
+
+      const updated: WatchlistStock[] = data.symbols.map(placeholderStock);
+      setStocks((prev) => updated.map((s) => prev.find((p) => p.symbol === s.symbol) ?? s));
+    } catch {
+      setListError("Failed to remove from watchlist");
+    }
   }
 
   return (
@@ -101,12 +154,12 @@ export function Watchlist() {
             </span>
           )}
           <button
-            onClick={() => fetchQuotes(symbols)}
-            disabled={loading}
+            onClick={() => fetchQuotes(stocks.map((s) => s.symbol))}
+            disabled={loadingQuotes}
             aria-label="Refresh quotes"
             className="p-1.5 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-panel-raised)] transition-colors disabled:opacity-50"
           >
-            <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
+            <RefreshCw size={13} className={loadingQuotes ? "animate-spin" : ""} />
           </button>
         </div>
       }
@@ -114,6 +167,11 @@ export function Watchlist() {
       {error && (
         <div className="mb-3 text-xs text-[var(--bear)] bg-[var(--bear-dim)] border border-[var(--bear)] rounded-md px-3 py-2">
           {error}. Showing sample prices — check FINNHUB_API_KEY is set correctly.
+        </div>
+      )}
+      {listError && (
+        <div className="mb-3 text-xs text-[var(--bear)] bg-[var(--bear-dim)] border border-[var(--bear)] rounded-md px-3 py-2">
+          {listError}. Watchlist changes may not be saved — check database connection.
         </div>
       )}
 
@@ -138,7 +196,13 @@ export function Watchlist() {
       </div>
 
       <div className="space-y-1">
-        {stocks.length === 0 && (
+        {loadingList && (
+          <div className="flex items-center justify-center gap-2 text-sm text-[var(--text-muted)] py-6">
+            <Loader2 size={14} className="animate-spin" />
+            Loading watchlist...
+          </div>
+        )}
+        {!loadingList && stocks.length === 0 && (
           <div className="text-sm text-[var(--text-muted)] text-center py-6">
             No stocks yet. Add a ticker to start tracking.
           </div>
