@@ -1,27 +1,69 @@
 "use client";
 
-import { useState } from "react";
-import { Plus, X, Search } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Plus, X, Search, RefreshCw } from "lucide-react";
 import { watchlistDefault } from "@/lib/mock-data";
 import { Panel } from "./ui";
 import { formatNumber, formatSigned } from "@/lib/utils";
 import { WatchlistStock } from "@/types";
 
-function randomQuote(symbol: string): WatchlistStock {
-  const price = 50 + Math.random() * 500;
-  const changePercent = (Math.random() - 0.5) * 4;
-  return {
-    symbol: symbol.toUpperCase(),
-    name: `${symbol.toUpperCase()} Holdings`,
-    price,
-    change: (price * changePercent) / 100,
-    changePercent,
-  };
+interface QuoteResult {
+  symbol: string;
+  price?: number;
+  change?: number;
+  changePercent?: number;
+  error?: boolean;
 }
 
 export function Watchlist() {
   const [stocks, setStocks] = useState<WatchlistStock[]>(watchlistDefault);
   const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [live, setLive] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const symbols = stocks.map((s) => s.symbol);
+
+  const fetchQuotes = useCallback(async (syms: string[]) => {
+    if (syms.length === 0) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/quotes?symbols=${syms.join(",")}`);
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error || "Failed to load live data");
+        setLive(false);
+        return;
+      }
+
+      setLive(true);
+      setStocks((prev) =>
+        prev.map((stock) => {
+          const quote = data.quotes.find((q: QuoteResult) => q.symbol === stock.symbol);
+          if (!quote || quote.error) return stock;
+          return {
+            ...stock,
+            price: quote.price,
+            change: quote.change,
+            changePercent: quote.changePercent,
+          };
+        })
+      );
+    } catch {
+      setError("Failed to load live data");
+      setLive(false);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Fetch live quotes on mount
+  useEffect(() => {
+    fetchQuotes(symbols);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function addStock() {
     const symbol = input.trim().toUpperCase();
@@ -30,16 +72,51 @@ export function Watchlist() {
       setInput("");
       return;
     }
-    setStocks([...stocks, randomQuote(symbol)]);
+    const newStock: WatchlistStock = {
+      symbol,
+      name: symbol,
+      price: 0,
+      change: 0,
+      changePercent: 0,
+    };
+    setStocks((prev) => [...prev, newStock]);
     setInput("");
+    fetchQuotes([symbol]);
   }
 
   function removeStock(symbol: string) {
-    setStocks(stocks.filter((s) => s.symbol !== symbol));
+    setStocks((prev) => prev.filter((s) => s.symbol !== symbol));
   }
 
   return (
-    <Panel eyebrow="Watchlist" title="My Stocks">
+    <Panel
+      eyebrow="Watchlist"
+      title="My Stocks"
+      action={
+        <div className="flex items-center gap-2">
+          {live && (
+            <span className="flex items-center gap-1.5 text-[10px] font-mono-data text-[var(--bull)]">
+              <span className="w-1.5 h-1.5 rounded-full bg-[var(--bull)] pulse-dot" />
+              LIVE
+            </span>
+          )}
+          <button
+            onClick={() => fetchQuotes(symbols)}
+            disabled={loading}
+            aria-label="Refresh quotes"
+            className="p-1.5 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-panel-raised)] transition-colors disabled:opacity-50"
+          >
+            <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
+          </button>
+        </div>
+      }
+    >
+      {error && (
+        <div className="mb-3 text-xs text-[var(--bear)] bg-[var(--bear-dim)] border border-[var(--bear)] rounded-md px-3 py-2">
+          {error}. Showing sample prices — check FINNHUB_API_KEY is set correctly.
+        </div>
+      )}
+
       <div className="flex gap-2 mb-4">
         <div className="relative flex-1">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" />
