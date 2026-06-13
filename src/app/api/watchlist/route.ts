@@ -1,41 +1,52 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@vercel/postgres";
+import { Pool } from "pg";
 
 // Single-user demo: all symbols are stored in one shared table since
 // there's currently only one login. If multi-user auth is added later,
 // add a user_id column and filter by it.
 
-function getClient() {
-  // POSTGRES_URL is typically the pooled connection string Vercel provides.
-  // Fall back to DATABASE_URL if that's what's configured instead.
+let pool: Pool | null = null;
+
+function getPool(): Pool {
+  if (pool) return pool;
+
   const connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL;
-  return createClient({ connectionString });
+  if (!connectionString) {
+    throw new Error("No database connection string configured (POSTGRES_URL / DATABASE_URL)");
+  }
+
+  pool = new Pool({
+    connectionString,
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 8000,
+    max: 1,
+  });
+  return pool;
 }
 
-async function ensureTable(client: ReturnType<typeof getClient>) {
-  await client.sql`
+async function ensureTable() {
+  const db = getPool();
+  await db.query(`
     CREATE TABLE IF NOT EXISTS watchlist (
       id SERIAL PRIMARY KEY,
       symbol TEXT UNIQUE NOT NULL,
       added_at TIMESTAMPTZ DEFAULT now()
     );
-  `;
+  `);
 }
 
 const DEFAULT_SYMBOLS = ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META"];
 
 export async function GET() {
-  const client = getClient();
   try {
-    await client.connect();
-    await ensureTable(client);
+    await ensureTable();
+    const db = getPool();
 
-    const { rows } = await client.sql`SELECT symbol FROM watchlist ORDER BY added_at ASC;`;
+    const { rows } = await db.query("SELECT symbol FROM watchlist ORDER BY added_at ASC;");
 
-    // Seed with defaults on first run if table is empty
     if (rows.length === 0) {
       for (const symbol of DEFAULT_SYMBOLS) {
-        await client.sql`INSERT INTO watchlist (symbol) VALUES (${symbol}) ON CONFLICT (symbol) DO NOTHING;`;
+        await db.query("INSERT INTO watchlist (symbol) VALUES ($1) ON CONFLICT (symbol) DO NOTHING;", [symbol]);
       }
       return NextResponse.json({ symbols: DEFAULT_SYMBOLS });
     }
@@ -43,16 +54,13 @@ export async function GET() {
     return NextResponse.json({ symbols: rows.map((r) => r.symbol as string) });
   } catch (err) {
     return NextResponse.json({ error: "Database error: " + String(err) }, { status: 500 });
-  } finally {
-    await client.end();
   }
 }
 
 export async function POST(req: NextRequest) {
-  const client = getClient();
   try {
-    await client.connect();
-    await ensureTable(client);
+    await ensureTable();
+    const db = getPool();
 
     const { symbol } = await req.json();
     if (!symbol || typeof symbol !== "string") {
@@ -60,35 +68,30 @@ export async function POST(req: NextRequest) {
     }
 
     const upper = symbol.trim().toUpperCase();
-    await client.sql`INSERT INTO watchlist (symbol) VALUES (${upper}) ON CONFLICT (symbol) DO NOTHING;`;
+    await db.query("INSERT INTO watchlist (symbol) VALUES ($1) ON CONFLICT (symbol) DO NOTHING;", [upper]);
 
-    const { rows } = await client.sql`SELECT symbol FROM watchlist ORDER BY added_at ASC;`;
+    const { rows } = await db.query("SELECT symbol FROM watchlist ORDER BY added_at ASC;");
     return NextResponse.json({ symbols: rows.map((r) => r.symbol as string) });
   } catch (err) {
     return NextResponse.json({ error: "Database error: " + String(err) }, { status: 500 });
-  } finally {
-    await client.end();
   }
 }
 
 export async function DELETE(req: NextRequest) {
-  const client = getClient();
   try {
-    await client.connect();
-    await ensureTable(client);
+    await ensureTable();
+    const db = getPool();
 
     const symbol = req.nextUrl.searchParams.get("symbol");
     if (!symbol) {
       return NextResponse.json({ error: "Missing symbol query param" }, { status: 400 });
     }
 
-    await client.sql`DELETE FROM watchlist WHERE symbol = ${symbol.toUpperCase()};`;
+    await db.query("DELETE FROM watchlist WHERE symbol = $1;", [symbol.toUpperCase()]);
 
-    const { rows } = await client.sql`SELECT symbol FROM watchlist ORDER BY added_at ASC;`;
+    const { rows } = await db.query("SELECT symbol FROM watchlist ORDER BY added_at ASC;");
     return NextResponse.json({ symbols: rows.map((r) => r.symbol as string) });
   } catch (err) {
     return NextResponse.json({ error: "Database error: " + String(err) }, { status: 500 });
-  } finally {
-    await client.end();
   }
 }
